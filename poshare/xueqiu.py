@@ -8,6 +8,8 @@ class Xueqiu:
 
     cookie = None
     ua = UserAgent()
+    bad_data = False
+    need_retry = False
 
     @staticmethod
     def config(conf):
@@ -25,6 +27,7 @@ class Xueqiu:
         self.s = requests.Session()
         self.s.headers.update({
             'User-Agent': Xueqiu.ua.random,
+            # 'User-Agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/116.0",
             'Cookie': Xueqiu.cookie
         })
         soup = self._html()
@@ -34,11 +37,22 @@ class Xueqiu:
         self.cube_tree_data = self._get_variable(soup, 'SNB.cubeTreeData')
     
     def _get_variable(self, soup, key):
+        if self.bad_data:
+            return None
         script_tag = soup.find('script', text=lambda text: text and f'{key}' in text)
+        if script_tag is None:
+            self.bad_data = True
+            return None
         script_content = script_tag.text
-        pattern = re.compile(rf"{key}\s*=\s*(.*?);", re.DOTALL)
+        # print(script_tag.text)
+        pattern = re.compile(rf"{key}\s*=\s*(.*?);\n", re.DOTALL)
         variable_value = re.search(pattern, script_content).group(1)
-        return json.loads(variable_value)
+        try:
+            return json.loads(variable_value)
+        except:
+            # print(variable_value)
+            self.need_retry = True
+            return None
 
     def _html(self):
         res = self.s.get(f'{self.url.get("html")}{self.symbol}')

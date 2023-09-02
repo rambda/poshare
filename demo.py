@@ -1,5 +1,106 @@
+from datetime import date, datetime
+import time
+from pathlib import Path
+import csv
+from openpyxl import Workbook
 from poshare import Xueqiu
+from config import config
 
-xq = Xueqiu(cookie='Hm_lvt_1db88642e346389874251b5a1eded6e3=1680923839; device_id=b3ae28a4538fcd61c7e20638ac15b835; s=c9163f91am; __utma=1.255194414.1680961295.1680961295.1680961295.1; __utmc=1; __utmz=1.1680961295.1.1.utmcsr=(direct)|utmccn=(direct)|utmcmd=(none); xq_a_token=e50ad15865c6b2344d82d894ede78a931af55267; xqat=e50ad15865c6b2344d82d894ede78a931af55267; xq_r_token=8791f7459a330935ad4f26259dbedcf4e7eeeb13; xq_id_token=eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJ1aWQiOjkyODgwMjQzODksImlzcyI6InVjIiwiZXhwIjoxNjgzNTUzNTc3LCJjdG0iOjE2ODA5NjE1Nzc4ODMsImNpZCI6ImQ5ZDBuNEFadXAifQ.Gq45fujMqAP-Fw444tGaq5_MY8Izbg0LFflSkZcTKfyR6r7LasMq-Qji1l-ztlzQuw9UR6oRyFiAhfIOaovO5qjdVY-2IxrJHJqJ17voapgQpFfg0Uioe9jD3_HOsOIxxLp7ZctorUZKtLEUF7lMSOGSx8ihSHqy3u1ribSQIOmI8MABnw46da6Saj5Fty7dhxVS3TbOj6HzqQqJePtUSH56rslbbrM9OKhB8FB2H5szSznOpZ7LdTwM4qiAKzQhpPDy5zKrALNTZC30iBC9bTlMKr4YsQCElm1ik-_srbFAkEnO1TOjR7kIlhGd3g0Rnh-9wSxoTYsVkba5NK6_yw; xq_is_login=1; u=9288024389; snbim_minify=true; bid=e7d7ea46b04b80789f8dbe16e345b4da_lg814rlu; acw_tc=2760825c16810400305627224e2bc2fbefae821e89d140c07b519063030dae; Hm_lpvt_1db88642e346389874251b5a1eded6e3=1681040429')
 
-xq.all(cube_symbol='ZH1254937')
+def json_to_pf(dict):
+    dict['link'] = 'https://xueqiu.com/P/%s' % dict['symbol']
+    dict['analysis_link'] = 'https://xueqiu.com/service/p/cube-analyze?symbol=%s' % dict['symbol']
+    dict['owner_link'] = 'https://xueqiu.com/u/%s' % dict['owner_id']
+    dict['annualized_gain_rate'] = dict['annualized_gain_rate'] / 100.0
+    created_at = int(dict['created_at'] / 1000)
+    dict['created_at'] = created_at
+    dict['created_date'] = datetime.fromtimestamp(created_at).strftime('%Y-%m-%d')
+    updated_at = int(dict['updated_at'] / 1000)
+    dict['updated_at'] = updated_at
+    dict['updated_date'] = datetime.fromtimestamp(created_at).strftime('%Y-%m-%d')
+    closed_at = dict['closed_at']
+    if closed_at is not None:
+        closed_at = int(closed_at / 1000)
+        duration = date.fromtimestamp(closed_at) - date.fromtimestamp(created_at)
+        dict['duration_years'] = duration.days / 365.0
+    else:
+        duration = date.today() - date.fromtimestamp(created_at)
+        dict['duration_years'] = duration.days / 365.0
+
+    # filtered_dict = {key: dict[key] for key in dict
+    #                  if key in {field.name for field in dataclasses.fields(Portfolio)}}
+    #
+    # return Portfolio(**filtered_dict)
+    return dict
+
+
+# for symbol in ["%06d" % i for i in range(0, 1e6) + "%06d" % i for i in range(1e6, 1e7)]:
+
+
+Xueqiu.config(config)
+
+fdir = Path("download")
+# fdir.mkdir(parents=True, exist_ok=True)
+
+meta_path = fdir / ("meta_" + time.strftime("%Y%m") + ".csv")
+meta_path.touch()
+excel_path = fdir / ("excel_" + time.strftime("%Y%m") + ".xlsx")
+excel_path.touch()
+
+workbook = Workbook()
+sheet = workbook.active
+
+fields = ['symbol', 'name', 'market', 'duration_years', 'annualized_gain_rate', 'net_value', 'analysis_link',
+          'description', 'owner_id', 'created_date', "updated_date", 'closed_at']
+sheet.append(fields)
+
+symbols = [row[0] for row in csv.reader(meta_path.open('r', encoding='utf-8'))]
+
+with meta_path.open('a', newline='\n', encoding='utf-8') as f:
+    writer = csv.writer(f)
+
+    # for symbol in ['ZH2363479', 'ZH1350829']:
+    n1e6 = int(1e6)
+    n1e7 = int(1e7)
+    for symbol in ["ZH%06d" % i for i in range(0, n1e6)] + ["ZH%07d" % i for i in range(n1e6, n1e7)]:
+
+        if symbol in symbols:
+            # print("skipped.")
+            continue
+
+        xq = Xueqiu(symbol=symbol)
+        time.sleep(1.5)
+
+        if xq.bad_data:
+            writer.writerow([symbol, None, None])
+            print(symbol, " ", "bad data.", "\n")
+            continue
+
+        if xq.need_retry:
+            writer.writerow([symbol + "_retry", None, None])
+            print(symbol, " ", "need_retry.", "\n")
+            continue
+
+        pf = json_to_pf(xq.cube_info)
+
+        writer.writerow([symbol, pf['annualized_gain_rate'], pf['duration_years']])
+        print(symbol, " ", "CAGR=", pf['annualized_gain_rate'], " ", "YEAR=", pf['duration_years'], "\n")
+
+        if pf['annualized_gain_rate'] > 0.5 and pf['net_value'] > 5.0:
+            # print([pf[field] for field in fields])
+            sheet.append([pf[field] for field in fields])
+            # print(pf)
+            name_cell = sheet.cell(row=sheet.max_row, column=fields.index('name') + 1)
+            name_cell.hyperlink = pf['link']
+            name_cell.style = "Hyperlink"
+
+            analysis_link_cell = sheet.cell(row=sheet.max_row, column=fields.index('analysis_link') + 1)
+            analysis_link_cell.hyperlink = pf['analysis_link']
+            analysis_link_cell.hyperlink.display = "Analysis"
+            analysis_link_cell.style = "Hyperlink"
+
+            owner_id_cell = sheet.cell(row=sheet.max_row, column=fields.index('owner_id') + 1)
+            owner_id_cell.hyperlink = pf['owner_link']
+            owner_id_cell.style = "Hyperlink"
+
+workbook.save(excel_path)
